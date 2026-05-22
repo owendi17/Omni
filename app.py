@@ -110,7 +110,7 @@ st.markdown("<h1 style='text-align: center; color: #1E3A8A;'>🎙️ OmniVoice P
 st.markdown("<h3 style='text-align: center; color: #4B5563;'>Voice-First Dynamic Inventory Assistant</h3>", unsafe_allow_html=True)
 st.write("---")
 
-# --- 📊 SIDEBAR STATE ---
+# --- 📊 FIXED SIDEBAR FOR METRICS (Keeps main screen clean) ---
 with st.sidebar:
     st.header("📊 Live System State")
     st.write("**Current Inventory:**")
@@ -121,27 +121,27 @@ with st.sidebar:
     st.metric("Total Money Earned Today", f"{tot} KSH")
 
 st.info("💡 **Try Saying:** 'I have sold 5 bags of rice' or 'What was my performance today?'")
-st.write("##")
 
-# --- 🔒 STATIONARY CONTAINERS PLACED HIGHER ---
+# --- 🔒 CRITICAL FIX: PRE-ALLOCATED STATIONARY CONTAINERS ---
+# These containers reserve empty blocks on the web page so it NEVER shifts up or down!
+status_container = st.empty()
 transcription_container = st.empty()
 response_container = st.empty()
 
-# --- 🔘 MICROPHONE CONTAINER ---
+st.write("##")
+
+# Center-aligned stationary microphone
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     st.markdown("<p style='text-align: center; font-weight: bold;'>TAP MICROPHONE TO COMMAND:</p>", unsafe_allow_html=True)
     audio_bytes = audio_recorder(text="", recording_color="#ef4444", neutral_color="#10b981", icon_size="5x")
-
-# --- ⏳ STATUS CONTAINER (Placed at the bottom to stop jumping) ---
-status_container = st.empty()
 
 # --- 🔄 FIXED POSITION PROCESSING PIPELINE ---
 if audio_bytes:
     with open("user_voice.wav", "wb") as f:
         f.write(audio_bytes)
         
-    # Appends alert message to the bottom, preventing existing UI items from moving down
+    # Inject processing alerts directly into the static containers
     status_container.warning("⏳ Processing calculations... please hold steady.")
     
     recognizer = sr.Recognizer()
@@ -150,18 +150,18 @@ if audio_bytes:
         try:
             user_text = recognizer.recognize_google(audio_data)
             
-            # Populate text placeholders above the microphone smoothly
+            # Clear out the processing warning state cleanly
+            status_container.empty()
+            
+            # Render text instantly in their pre-reserved positions (No jumping!)
             transcription_container.markdown(f"### 🗣️ Detected Instruction:\n> **\"{user_text}\"**")
             
             reply_message = process_voice_command(user_text)
             
             response_container.markdown(
-                f"<div style='font-size:22px; font-weight:bold; background-color:#F3F4F6; padding:20px; border-radius:10px; border-left: 8px solid #1E3A8A; margin-top:15px; margin-bottom:15px;'>🎙️ Agent Response: {reply_message}</div>", 
+                f"<div style='font-size:22px; font-weight:bold; background-color:#F3F4F6; padding:20px; border-radius:10px; border-left: 8px solid #1E3A8A; margin-top:15px;'>🎙️ Agent Response: {reply_message}</div>", 
                 unsafe_allow_html=True
             )
-            
-            # Clear out the bottom status cleanly without modifying top layout positions
-            status_container.empty()
             
             speak_text(reply_message)
             
