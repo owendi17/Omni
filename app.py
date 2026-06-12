@@ -82,7 +82,7 @@ Known items: sugar, beans, rice, maize, cooking oil.
 
 Respond ONLY with valid JSON, nothing else:
 {{
-  "intent": "restock" | "check_stock" | "sale" | "performance" | "undo" | "other",
+  "intent": "restock" | "check_stock" | "sale" | "performance" | "undo" | "daily_report" | "other",
   "item": "<one of the known items, or null>",
   "quantity": <number or null>,
   "branch": "<branch name or null>"
@@ -237,6 +237,47 @@ def process_voice_command(text_input):
         if unsold_items:
             summary += "Items not sold today: " + ", ".join(unsold_items) + "."
         return summary
+
+    # --- DAILY OPENING/CLOSING REPORT (NEW) ---
+    elif intent == "daily_report":
+        total_revenue = sum(s["revenue"] for s in sales.values())
+        lines = ["Here is your daily report. "]
+
+        # Opening stock summary
+        opening_parts = [f"{db[it]['opening']} {db[it]['unit']} of {it}" for it in db.keys()]
+        lines.append("Opening stock today was: " + ", ".join(opening_parts) + ". ")
+
+        # Restocks
+        restocked_items = [(it, qty) for it, qty in restocks.items() if qty > 0]
+        if restocked_items:
+            restock_parts = [f"{qty} {db[it]['unit']} of {it}" for it, qty in restocked_items]
+            lines.append("You restocked: " + ", ".join(restock_parts) + ". ")
+        else:
+            lines.append("No restocks were made today. ")
+
+        # Sales
+        sold_items = [(it, data) for it, data in sales.items() if data["qty_sold"] > 0]
+        if sold_items:
+            sale_parts = [f"{data['qty_sold']} {db[it]['unit']} of {it} for {data['revenue']} shillings" for it, data in sold_items]
+            lines.append("You sold: " + ", and ".join(sale_parts) + ". ")
+        else:
+            lines.append("No sales were recorded today. ")
+
+        lines.append(f"Your total revenue today is {total_revenue} shillings. ")
+
+        # Current/closing stock
+        closing_parts = [f"{db[it]['current']} {db[it]['unit']} of {it}" for it in db.keys()]
+        lines.append("Your current closing stock is: " + ", ".join(closing_parts) + ". ")
+
+        # Low stock alerts
+        alerts = [check_low_stock(db, it) for it in db.keys()]
+        alerts = [a for a in alerts if a]
+        if alerts:
+            lines.append(" ".join(alerts))
+        else:
+            lines.append("All stock levels are currently healthy.")
+
+        return "".join(lines)
 
     # --- CHECK STOCK ---
     elif intent == "check_stock":
