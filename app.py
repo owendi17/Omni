@@ -4,12 +4,56 @@ import openai
 import anthropic
 import json
 import re
+import sqlite3
+from datetime import datetime
 
 # --- 🎙️ OPENAI CLIENT FOR WHISPER TRANSCRIPTION (cloud-based, accent-robust) ---
 openai_client = openai.OpenAI()
 
 # --- 🤖 CLAUDE CLIENT FOR INTENT PARSING ---
 client = anthropic.Anthropic()
+
+
+# --- 🗄️ PERSISTENT STORAGE (SQLite) ---
+def get_db_connection():
+    conn = sqlite3.connect("omnivoice.db", check_same_thread=False)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            type TEXT NOT NULL,        -- 'sale' or 'restock'
+            item TEXT NOT NULL,
+            quantity INTEGER NOT NULL,
+            revenue INTEGER NOT NULL DEFAULT 0,
+            spoken_command TEXT
+        )
+    """)
+    conn.commit()
+    return conn
+
+
+def log_transaction(tx_type, item, quantity, revenue=0, spoken_command=""):
+    conn = get_db_connection()
+    conn.execute(
+        "INSERT INTO transactions (timestamp, type, item, quantity, revenue, spoken_command) VALUES (?, ?, ?, ?, ?, ?)",
+        (datetime.now().isoformat(), tx_type, item, quantity, revenue, spoken_command)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_last_transaction():
+    conn = get_db_connection()
+    row = conn.execute("SELECT * FROM transactions ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+    return row
+
+
+def delete_transaction(tx_id):
+    conn = get_db_connection()
+    conn.execute("DELETE FROM transactions WHERE id = ?", (tx_id,))
+    conn.commit()
+    conn.close()
 
 
 def parse_command(transcribed_text):
@@ -27,7 +71,7 @@ Known items: sugar, beans, rice, maize, cooking oil.
 
 Respond ONLY with valid JSON, nothing else:
 {{
-  "intent": "restock" | "check_stock" | "sale" | "performance" | "other",
+  "intent": "restock" | "check_stock" | "sale" | "performance" | "undo" | "other",
   "item": "<one of the known items, or null>",
   "quantity": <number or null>,
   "branch": "<branch name or null>"
@@ -96,6 +140,7 @@ def process_voice_command(text_input):
         sales[item]["qty_sold"] += quantity
         revenue = quantity * db[item]["price"]
         sales[item]["revenue"] += revenue
+        log_transaction("sale", item, quantity, revenue, text_input)
 
         return (f"Successfully logged. You have sold {quantity} {db[item]['unit']} of {item}. "
                 f"You are now remaining with {db[item]['current']} {db[item]['unit']}. "
@@ -111,9 +156,41 @@ def process_voice_command(text_input):
         db[item]["current"] += quantity
         db[item]["opening"] += quantity  # so today's opening reflects the new total
         restocks[item] += quantity
+        log_transaction("restock", item, quantity, 0, text_input)
 
         return (f"Restock recorded. You have added {quantity} {db[item]['unit']} of {item}. "
                 f"Your current stock for {item} is now {db[item]['current']} {db[item]['unit']}.")
+
+    # --- UNDO (NEW) ---
+    elif intent == "undo":
+        last_tx = get_last_transaction()
+        if not last_tx:
+            return "There is nothing to undo. No transactions have been recorded yet."
+
+        tx_id, _, tx_type, tx_item, tx_qty, tx_revenue, _ = last_tx
+
+        if tx_item not in db:
+            delete_transaction(tx_id)
+            return "I removed the last record, but the item was no longer in the system."
+
+        if tx_type == "sale":
+            db[tx_item]["current"] += tx_qty
+            sales[tx_item]["qty_sold"] -= tx_qty
+            sales[tx_item]["revenue"] -= tx_revenue
+            delete_transaction(tx_id)
+            return (f"Undone. I have reversed the sale of {tx_qty} {db[tx_item]['unit']} of {tx_item}. "
+                    f"Your stock is now back to {db[tx_item]['current']} {db[tx_item]['unit']}.")
+
+        elif tx_type == "restock":
+            db[tx_item]["current"] -= tx_qty
+            db[tx_item]["opening"] -= tx_qty
+            restocks[tx_item] -= tx_qty
+            delete_transaction(tx_id)
+            return (f"Undone. I have reversed the restock of {tx_qty} {db[tx_item]['unit']} of {tx_item}. "
+                    f"Your stock is now back to {db[tx_item]['current']} {db[tx_item]['unit']}.")
+
+        delete_transaction(tx_id)
+        return "I have removed the last record."
 
     # --- PERFORMANCE / SUMMARY ---
     elif intent == "performance":
@@ -196,6 +273,22 @@ with st.sidebar:
     st.write("---")
     tot = sum(i['revenue'] for i in st.session_state.sales_log.values())
     st.metric("Total Money Earned Today", f"{tot} KSH")
+    st.write("---")
+    st.write("**Recent Transactions:**")
+    conn = get_db_connection()
+    recent = conn.execute(
+        "SELECT type, item, quantity, revenue, timestamp FROM transactions ORDER BY id DESC LIMIT 5"
+    ).fetchall()
+    conn.close()
+    if recent:
+        for r_type, r_item, r_qty, r_rev, r_time in recent:
+            time_str = r_time.split("T")[1][:5]
+            if r_type == "sale":
+                st.write(f"- {time_str} — Sold {r_qty} {r_item} (KSH {r_rev})")
+            else:
+                st.write(f"- {time_str} — Restocked {r_qty} {r_item}")
+    else:
+        st.write("No transactions yet.")
 
 st.info("💡 **Try Saying:** 'I have sold 5 bags of rice', 'I have restocked 50 bags of rice', or 'What was my performance today?'")
 st.write("##")
