@@ -1,16 +1,12 @@
 import streamlit as st
 from audio_recorder_streamlit import audio_recorder
-import whisper
+import openai
 import anthropic
 import json
 import re
 
-# --- 🎙️ LOAD WHISPER ONCE (cached so it doesn't reload every interaction) ---
-@st.cache_resource
-def load_whisper_model():
-    return whisper.load_model("base")  # "small" gives better accuracy if you have the compute
-
-whisper_model = load_whisper_model()
+# --- 🎙️ OPENAI CLIENT FOR WHISPER TRANSCRIPTION (cloud-based, accent-robust) ---
+openai_client = openai.OpenAI()
 
 # --- 🤖 CLAUDE CLIENT FOR INTENT PARSING ---
 client = anthropic.Anthropic()
@@ -228,9 +224,14 @@ if audio_bytes:
         status_container.warning("⏳ Processing... please hold steady.")
 
         try:
-            # Whisper handles a wide range of accents much better than cloud STT
-            result = whisper_model.transcribe("user_voice.wav", language="en")
-            user_text = result["text"].strip()
+            # Whisper API handles a wide range of accents much better than cloud STT
+            with open("user_voice.wav", "rb") as audio_file:
+                transcript = openai_client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                    language="en"
+                )
+            user_text = transcript.text.strip()
 
             if not user_text:
                 status_container.empty()
