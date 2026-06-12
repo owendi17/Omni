@@ -56,6 +56,17 @@ def delete_transaction(tx_id):
     conn.close()
 
 
+def check_low_stock(db, item):
+    """Return a spoken alert if the item's stock has dropped to or below its threshold, else None."""
+    current = db[item]["current"]
+    threshold = db[item].get("low_threshold", 0)
+    if current <= threshold:
+        return (f"Low stock alert. Your {item} is down to {current} {db[item]['unit']}, "
+                f"which is at or below your restock threshold of {threshold}. "
+                f"You may want to restock {item} soon.")
+    return None
+
+
 def parse_command(transcribed_text):
     """Use Claude to extract structured intent from flexible natural speech."""
     response = client.messages.create(
@@ -90,11 +101,11 @@ Respond ONLY with valid JSON, nothing else:
 # --- 📦 INITIALIZE STATEFUL DATABASE (Persists across microphone runs) ---
 if "db" not in st.session_state:
     st.session_state.db = {
-        "sugar": {"opening": 120, "current": 120, "unit": "kilograms", "price": 150},
-        "beans": {"opening": 45, "current": 45, "unit": "packets", "price": 200},
-        "rice": {"opening": 200, "current": 200, "unit": "bags", "price": 3500},
-        "maize": {"opening": 85, "current": 85, "unit": "bags", "price": 2800},
-        "cooking oil": {"opening": 30, "current": 30, "unit": "liters", "price": 400}
+        "sugar": {"opening": 120, "current": 120, "unit": "kilograms", "price": 150, "low_threshold": 20},
+        "beans": {"opening": 45, "current": 45, "unit": "packets", "price": 200, "low_threshold": 10},
+        "rice": {"opening": 200, "current": 200, "unit": "bags", "price": 3500, "low_threshold": 20},
+        "maize": {"opening": 85, "current": 85, "unit": "bags", "price": 2800, "low_threshold": 15},
+        "cooking oil": {"opening": 30, "current": 30, "unit": "liters", "price": 400, "low_threshold": 5}
     }
 
 if "sales_log" not in st.session_state:
@@ -142,9 +153,15 @@ def process_voice_command(text_input):
         sales[item]["revenue"] += revenue
         log_transaction("sale", item, quantity, revenue, text_input)
 
-        return (f"Successfully logged. You have sold {quantity} {db[item]['unit']} of {item}. "
-                f"You are now remaining with {db[item]['current']} {db[item]['unit']}. "
-                f"That transaction brought in {revenue} shillings.")
+        message = (f"Successfully logged. You have sold {quantity} {db[item]['unit']} of {item}. "
+                    f"You are now remaining with {db[item]['current']} {db[item]['unit']}. "
+                    f"That transaction brought in {revenue} shillings.")
+
+        alert = check_low_stock(db, item)
+        if alert:
+            message += " " + alert
+
+        return message
 
     # --- RESTOCK (NEW) ---
     elif intent == "restock":
