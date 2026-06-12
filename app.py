@@ -2,6 +2,12 @@ import streamlit as st
 from audio_recorder_streamlit import audio_recorder
 import speech_recognition as sr
 import re
+import whisper
+import anthropic
+
+model = whisper.load_model("base")  # or "small" for better accuracy if compute allows
+result = model.transcribe("audio_input.wav")
+transcribed_text = result["text"]
 
 # --- 📦 INITIALIZE STATEFUL DATABASE (Persists across microphone runs) ---
 if "db" not in st.session_state:
@@ -21,6 +27,31 @@ if "sales_log" not in st.session_state:
         "maize": {"qty_sold": 0, "revenue": 0},
         "cooking oil": {"qty_sold": 0, "revenue": 0}
     }
+
+
+
+client = anthropic.Anthropic()
+
+def parse_command(transcribed_text):
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=200,
+        messages=[{
+            "role": "user",
+            "content": f"""Extract the intent and details from this voice command for a stock management system.
+            
+Command: "{transcribed_text}"
+
+Respond ONLY in JSON format:
+{{
+  "intent": "restock" | "check_stock" | "sale" | "other",
+  "item": "<item name>",
+  "quantity": <number>,
+  "branch": "<branch name or null>"
+}}"""
+        }]
+    )
+    return response.content[0].text
 
 # --- 🧠 VOICE INTENT PARSING ENGINE ---
 def process_voice_command(text_input):
