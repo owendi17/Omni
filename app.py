@@ -25,18 +25,19 @@ def get_db_connection():
             item TEXT NOT NULL,
             quantity INTEGER NOT NULL,
             revenue INTEGER NOT NULL DEFAULT 0,
-            spoken_command TEXT
+            spoken_command TEXT,
+            speaker TEXT DEFAULT 'Unknown'
         )
     """)
     conn.commit()
     return conn
 
 
-def log_transaction(tx_type, item, quantity, revenue=0, spoken_command=""):
+def log_transaction(tx_type, item, quantity, revenue=0, spoken_command="", speaker="Unknown"):
     conn = get_db_connection()
     conn.execute(
-        "INSERT INTO transactions (timestamp, type, item, quantity, revenue, spoken_command) VALUES (?, ?, ?, ?, ?, ?)",
-        (datetime.now().isoformat(), tx_type, item, quantity, revenue, spoken_command)
+        "INSERT INTO transactions (timestamp, type, item, quantity, revenue, spoken_command, speaker) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (datetime.now().isoformat(), tx_type, item, quantity, revenue, spoken_command, speaker)
     )
     conn.commit()
     conn.close()
@@ -80,12 +81,15 @@ Command: "{transcribed_text}"
 
 Known items: sugar, beans, rice, maize, cooking oil.
 
+If the speaker identifies themselves (e.g. "This is John" or "John here"), extract their name.
+
 Respond ONLY with valid JSON, nothing else:
 {{
   "intent": "restock" | "check_stock" | "sale" | "performance" | "undo" | "daily_report" | "other",
   "item": "<one of the known items, or null>",
   "quantity": <number or null>,
-  "branch": "<branch name or null>"
+  "branch": "<branch name or null>",
+  "speaker": "<name if stated, or null>"
 }}"""
         }]
     )
@@ -131,6 +135,7 @@ def process_voice_command(text_input):
     intent = parsed.get("intent")
     item = parsed.get("item")
     quantity = parsed.get("quantity")
+    speaker = parsed.get("speaker") or "Unknown"
 
     # Normalize item name in case Claude returns slightly different casing
     if item:
@@ -151,7 +156,7 @@ def process_voice_command(text_input):
         sales[item]["qty_sold"] += quantity
         revenue = quantity * db[item]["price"]
         sales[item]["revenue"] += revenue
-        log_transaction("sale", item, quantity, revenue, text_input)
+        log_transaction("sale", item, quantity, revenue, text_input, speaker)
 
         message = (f"Successfully logged. You have sold {quantity} {db[item]['unit']} of {item}. "
                     f"You are now remaining with {db[item]['current']} {db[item]['unit']}. "
@@ -173,7 +178,7 @@ def process_voice_command(text_input):
         db[item]["current"] += quantity
         db[item]["opening"] += quantity  # so today's opening reflects the new total
         restocks[item] += quantity
-        log_transaction("restock", item, quantity, 0, text_input)
+        log_transaction("restock", item, quantity, 0, text_input, speaker)
 
         return (f"Restock recorded. You have added {quantity} {db[item]['unit']} of {item}. "
                 f"Your current stock for {item} is now {db[item]['current']} {db[item]['unit']}.")
