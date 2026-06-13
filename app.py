@@ -435,16 +435,35 @@ def process_voice_command(text_input):
 
 # --- 🔊 BROWSER-NATIVE TEXT-TO-SPEECH ---
 def speak_text(text_to_say):
-    safe_text = text_to_say.replace("'", "\\'")
+    safe_text = text_to_say.replace("'", "\\'").replace("\n", " ")
     js_speech = f"""
     <script>
-        var msg = new SpeechSynthesisUtterance('{safe_text}');
-        msg.lang = 'en-US';
-        var voices = window.speechSynthesis.getVoices();
-        if(voices.length > 0) {{
-            msg.voice = voices.filter(function(voice) {{ return voice.lang.includes('en'); }})[0];
+        function speakNow() {{
+            var msg = new SpeechSynthesisUtterance('{safe_text}');
+            msg.lang = 'en-US';
+            msg.rate = 0.95;
+            msg.pitch = 1.0;
+            msg.volume = 1.0;
+
+            var voices = window.speechSynthesis.getVoices();
+            if (voices.length > 0) {{
+                // Prefer a Google/Microsoft English voice if available — clearer than default
+                var preferred = voices.find(function(v) {{
+                    return v.lang.startsWith('en') && (v.name.includes('Google') || v.name.includes('Microsoft'));
+                }});
+                var anyEnglish = voices.find(function(v) {{ return v.lang.startsWith('en'); }});
+                msg.voice = preferred || anyEnglish || voices[0];
+            }}
+            window.speechSynthesis.cancel();  // stop any overlapping speech first
+            window.speechSynthesis.speak(msg);
         }}
-        window.speechSynthesis.speak(msg);
+
+        // Voices often load asynchronously — wait for them if not ready yet
+        if (window.speechSynthesis.getVoices().length === 0) {{
+            window.speechSynthesis.onvoiceschanged = speakNow;
+        }} else {{
+            speakNow();
+        }}
     </script>
     """
     st.components.v1.html(js_speech, height=0, width=0)
