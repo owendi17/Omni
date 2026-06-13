@@ -108,6 +108,62 @@ def mark_command_processed(cmd_id):
     conn.close()
 
 
+# --- 🗂️ DYNAMIC ITEM CATALOG (persisted in SQLite) ---
+def init_items_table():
+    conn = get_db_connection()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS items (
+            name TEXT PRIMARY KEY,
+            unit TEXT NOT NULL,
+            price INTEGER NOT NULL,
+            low_threshold INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    # Seed with defaults if empty
+    count = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+    if count == 0:
+        defaults = [
+            ("sugar", "kilograms", 150, 20),
+            ("beans", "packets", 200, 10),
+            ("rice", "bags", 3500, 20),
+            ("maize", "bags", 2800, 15),
+            ("cooking oil", "liters", 400, 5),
+        ]
+        conn.executemany("INSERT INTO items (name, unit, price, low_threshold) VALUES (?, ?, ?, ?)", defaults)
+    conn.commit()
+    conn.close()
+
+
+def get_all_items():
+    conn = get_db_connection()
+    rows = conn.execute("SELECT name, unit, price, low_threshold FROM items").fetchall()
+    conn.close()
+    return rows
+
+
+def add_item(name, unit, price, low_threshold=0):
+    conn = get_db_connection()
+    conn.execute(
+        "INSERT OR REPLACE INTO items (name, unit, price, low_threshold) VALUES (?, ?, ?, ?)",
+        (name, unit, price, low_threshold)
+    )
+    conn.commit()
+    conn.close()
+
+
+def set_item_threshold(name, low_threshold):
+    conn = get_db_connection()
+    cur = conn.execute("UPDATE items SET low_threshold = ? WHERE name = ?", (low_threshold, name))
+    conn.commit()
+    updated = cur.rowcount > 0
+    conn.close()
+    return updated
+
+
+def get_item_names():
+    return [row[0] for row in get_all_items()]
+
+
 def parse_command(transcribed_text):
     """Use Claude to extract structured intent from flexible natural speech."""
     response = client.messages.create(
@@ -119,17 +175,21 @@ def parse_command(transcribed_text):
 
 Command: "{transcribed_text}"
 
-Known items: sugar, beans, rice, maize, cooking oil.
+Known items: {", ".join(get_item_names())}.
 
 If the speaker identifies themselves (e.g. "This is John" or "John here"), extract their name.
+If the speaker wants to add a new item (e.g. "Add a new item called soap, price 80 shillings per bar"), use intent "add_item" and extract item, price, and unit (e.g. "bar").
+If the speaker wants to set or change a low-stock alert threshold (e.g. "Alert me when rice goes below 30 bags" or "Set rice threshold to 30"), use intent "set_threshold" and extract item and quantity (the new threshold).
 
 Respond ONLY with valid JSON, nothing else:
 {{
-  "intent": "restock" | "check_stock" | "sale" | "performance" | "undo" | "daily_report" | "other",
-  "item": "<one of the known items, or null>",
+  "intent": "restock" | "check_stock" | "sale" | "performance" | "undo" | "daily_report" | "add_item" | "set_threshold" | "other",
+  "item": "<item name, or null>",
   "quantity": <number or null>,
   "branch": "<branch name or null>",
-  "speaker": "<name if stated, or null>"
+  "speaker": "<name if stated, or null>",
+  "unit": "<unit for new item, or null>",
+  "price": <price for new item, or null>
 }}"""
         }]
     )
@@ -142,29 +202,28 @@ Respond ONLY with valid JSON, nothing else:
         return {"intent": "other", "item": None, "quantity": None, "branch": None}
 
 
-# --- 📦 INITIALIZE STATEFUL DATABASE (Persists across microphone runs) ---
+init_queue_table()
+init_items_table()
+
+# --- 📦 INITIALIZE STATEFUL DATABASE FROM ITEM CATALOG ---
 if "db" not in st.session_state:
-    st.session_state.db = {
-        "sugar": {"opening": 120, "current": 120, "unit": "kilograms", "price": 150, "low_threshold": 20},
-        "beans": {"opening": 45, "current": 45, "unit": "packets", "price": 200, "low_threshold": 10},
-        "rice": {"opening": 200, "current": 200, "unit": "bags", "price": 3500, "low_threshold": 20},
-        "maize": {"opening": 85, "current": 85, "unit": "bags", "price": 2800, "low_threshold": 15},
-        "cooking oil": {"opening": 30, "current": 30, "unit": "liters", "price": 400, "low_threshold": 5}
-    }
+    st.session_state.db = {}
+    for name, unit, price, low_threshold in get_all_items():
+        st.session_state.db[name] = {
+            "opening": 0, "current": 0, "unit": unit, "price": price, "low_threshold": low_threshold
+        }
+    # Seed starting stock for the default items only (first run)
+    starting_stock = {"sugar": 120, "beans": 45, "rice": 200, "maize": 85, "cooking oil": 30}
+    for name, qty in starting_stock.items():
+        if name in st.session_state.db:
+            st.session_state.db[name]["opening"] = qty
+            st.session_state.db[name]["current"] = qty
 
 if "sales_log" not in st.session_state:
-    st.session_state.sales_log = {
-        "sugar": {"qty_sold": 0, "revenue": 0},
-        "beans": {"qty_sold": 0, "revenue": 0},
-        "rice": {"qty_sold": 0, "revenue": 0},
-        "maize": {"qty_sold": 0, "revenue": 0},
-        "cooking oil": {"qty_sold": 0, "revenue": 0}
-    }
+    st.session_state.sales_log = {item: {"qty_sold": 0, "revenue": 0} for item in st.session_state.db.keys()}
 
 if "restock_log" not in st.session_state:
     st.session_state.restock_log = {item: 0 for item in st.session_state.db.keys()}
-
-init_queue_table()
 
 
 # --- 🧠 VOICE INTENT PROCESSING ENGINE (now powered by Claude for flexible phrasing) ---
@@ -255,6 +314,40 @@ def process_voice_command(text_input):
 
         delete_transaction(tx_id)
         return "I have removed the last record."
+
+    # --- ADD NEW ITEM (NEW) ---
+    elif intent == "add_item":
+        new_item = parsed.get("item")
+        unit = parsed.get("unit") or "units"
+        price = parsed.get("price")
+
+        if not new_item:
+            return "I understood you want to add a new item, but I couldn't catch its name. Please repeat with the item name."
+        new_item = new_item.lower().strip()
+        if not price:
+            return f"I understood you want to add {new_item}, but I couldn't catch the price. Please repeat including the price."
+
+        add_item(new_item, unit, int(price), 0)
+
+        # Add to live session state too
+        db[new_item] = {"opening": 0, "current": 0, "unit": unit, "price": int(price), "low_threshold": 0}
+        sales[new_item] = {"qty_sold": 0, "revenue": 0}
+        restocks[new_item] = 0
+
+        return (f"New item added. {new_item.capitalize()} has been added to your catalog, priced at {price} shillings per {unit}. "
+                f"You can now restock, sell, or check stock for {new_item}.")
+
+    # --- SET LOW-STOCK THRESHOLD (NEW) ---
+    elif intent == "set_threshold":
+        if not item or item not in db:
+            return "Please specify which item's alert threshold you'd like to set, and the item must already exist in your catalog."
+        if quantity is None:
+            return f"I understood you want to set an alert threshold for {item}, but I couldn't catch the number. Please repeat, for example: 'Alert me when {item} goes below 30 {db[item]['unit']}'."
+
+        db[item]["low_threshold"] = int(quantity)
+        set_item_threshold(item, int(quantity))
+
+        return (f"Got it. I will now alert you when {item} drops to {quantity} {db[item]['unit']} or below.")
 
     # --- PERFORMANCE / SUMMARY ---
     elif intent == "performance":
