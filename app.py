@@ -68,6 +68,46 @@ def check_low_stock(db, item):
     return None
 
 
+# --- 📡 OFFLINE QUEUE ---
+def init_queue_table():
+    conn = get_db_connection()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pending_commands (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            audio_path TEXT,
+            transcribed_text TEXT,
+            status TEXT DEFAULT 'pending'  -- 'pending' or 'processed'
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def queue_command(audio_path=None, transcribed_text=None):
+    conn = get_db_connection()
+    conn.execute(
+        "INSERT INTO pending_commands (timestamp, audio_path, transcribed_text, status) VALUES (?, ?, ?, 'pending')",
+        (datetime.now().isoformat(), audio_path, transcribed_text)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_pending_commands():
+    conn = get_db_connection()
+    rows = conn.execute("SELECT * FROM pending_commands WHERE status = 'pending' ORDER BY id ASC").fetchall()
+    conn.close()
+    return rows
+
+
+def mark_command_processed(cmd_id):
+    conn = get_db_connection()
+    conn.execute("UPDATE pending_commands SET status = 'processed' WHERE id = ?", (cmd_id,))
+    conn.commit()
+    conn.close()
+
+
 def parse_command(transcribed_text):
     """Use Claude to extract structured intent from flexible natural speech."""
     response = client.messages.create(
@@ -123,6 +163,8 @@ if "sales_log" not in st.session_state:
 
 if "restock_log" not in st.session_state:
     st.session_state.restock_log = {item: 0 for item in st.session_state.db.keys()}
+
+init_queue_table()
 
 
 # --- 🧠 VOICE INTENT PROCESSING ENGINE (now powered by Claude for flexible phrasing) ---
@@ -403,6 +445,48 @@ if audio_bytes:
                 status_container.empty()
                 speak_text(reply_message)
 
+        except (openai.APIConnectionError, anthropic.APIConnectionError):
+            # No internet — queue the raw audio for later processing
+            saved_path = f"queued_audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
+            with open(saved_path, "wb") as f:
+                f.write(audio_bytes)
+            queue_command(audio_path=saved_path, transcribed_text=None)
+            status_container.empty()
+            transcription_container.warning(
+                "📡 No internet connection right now. Your command has been saved and will be processed "
+                "automatically once you're back online."
+            )
+            speak_text("No internet connection right now. I have saved your command and will process it once you are back online.")
+
         except Exception as e:
             status_container.empty()
             transcription_container.error(f"⚠️ Something went wrong processing the audio: {e}")
+
+
+# --- 📡 PROCESS ANY QUEUED OFFLINE COMMANDS ---
+pending = get_pending_commands()
+if pending:
+    st.write("---")
+    st.warning(f"📡 {len(pending)} command(s) were saved while offline.")
+    if st.button("Process queued commands now"):
+        for cmd_id, ts, audio_path, transcribed_text, status in pending:
+            try:
+                if audio_path:
+                    with open(audio_path, "rb") as audio_file:
+                        transcript = openai_client.audio.transcriptions.create(
+                            model="whisper-1",
+                            file=audio_file,
+                            language="en"
+                        )
+                    text = transcript.text.strip()
+                else:
+                    text = transcribed_text
+
+                if text:
+                    reply = process_voice_command(text)
+                    st.write(f"✅ Processed: \"{text}\" → {reply}")
+
+                mark_command_processed(cmd_id)
+            except Exception as e:
+                st.error(f"Could not process queued command {cmd_id}: {e}")
+        st.rerun()
