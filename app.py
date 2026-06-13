@@ -183,7 +183,7 @@ If the speaker wants to set or change a low-stock alert threshold (e.g. "Alert m
 
 Respond ONLY with valid JSON, nothing else:
 {{
-  "intent": "restock" | "check_stock" | "sale" | "performance" | "undo" | "daily_report" | "add_item" | "set_threshold" | "other",
+  "intent": "restock" | "check_stock" | "sale" | "performance" | "undo" | "daily_report" | "add_item" | "set_threshold" | "help" | "other",
   "item": "<item name, or null>",
   "quantity": <number or null>,
   "branch": "<branch name or null>",
@@ -426,7 +426,9 @@ def process_voice_command(text_input):
         return (f"Stock check complete. Your opening stock today for {item} was {db[item]['opening']} {db[item]['unit']}. "
                 f"You have sold {sales[item]['qty_sold']} so far, and you are remaining with {db[item]['current']} {db[item]['unit']}.")
 
-    # --- FALLBACK ---
+    # --- HELP (NEW) ---
+    elif intent == "help":
+        return HELP_MESSAGE
     else:
         return ("I didn't quite catch that. You can say things like: "
                 "'I have sold 5 bags of rice', 'I have restocked 50 bags of rice', "
