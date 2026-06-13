@@ -457,6 +457,24 @@ st.markdown("<h1 style='text-align: center; color: #1E3A8A;'>🎙️ OmniVoice P
 st.markdown("<h3 style='text-align: center; color: #4B5563;'>Voice-First Dynamic Inventory Assistant</h3>", unsafe_allow_html=True)
 st.write("---")
 
+HELP_MESSAGE = (
+    "Welcome to OmniVoice. Here is what you can say. "
+    "To record a sale, say: I have sold 5 bags of rice. "
+    "To record new stock, say: I have restocked 50 bags of rice. "
+    "To check stock for an item, just say the item's name, like: how much rice do I have. "
+    "To hear how your day is going, say: what's my performance today, or, give me my daily report. "
+    "To undo your last action, say: undo that. "
+    "To add a brand new item, say: add a new item called soap, price 80 shillings per bar. "
+    "To set a low stock alert, say: alert me when rice goes below 30 bags. "
+    "You can say help at any time to hear this again. "
+    "Tap the microphone, then speak your command clearly."
+)
+
+# Speak the welcome message once per session, automatically
+if "welcomed" not in st.session_state:
+    st.session_state.welcomed = True
+    speak_text(HELP_MESSAGE)
+
 # --- 📊 SIDEBAR SYSTEM DASHBOARD ---
 with st.sidebar:
     st.header("📊 Live System State")
