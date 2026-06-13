@@ -502,10 +502,12 @@ HELP_MESSAGE = (
     "Tap the microphone, then speak your command clearly."
 )
 
-# Speak the welcome message once per session, automatically
+WELCOME_MESSAGE = "Hello. How may I help you? If you need help, say help."
+
+# Speak the simple welcome message once per session, automatically
 if "welcomed" not in st.session_state:
     st.session_state.welcomed = True
-    speak_text(HELP_MESSAGE)
+    speak_text(WELCOME_MESSAGE)
 
 # --- 📊 SIDEBAR SYSTEM DASHBOARD ---
 with st.sidebar:
