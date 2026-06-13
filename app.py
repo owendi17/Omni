@@ -225,6 +225,17 @@ if "sales_log" not in st.session_state:
 if "restock_log" not in st.session_state:
     st.session_state.restock_log = {item: 0 for item in st.session_state.db.keys()}
 
+# --- 📅 AUTOMATIC DAILY RESET ---
+if "last_date" not in st.session_state:
+    st.session_state.last_date = datetime.now().date()
+
+current_date = datetime.now().date()
+if current_date != st.session_state.last_date:
+    # New day detected — reset daily counters automatically
+    st.session_state.sales_log = {item: {"qty_sold": 0, "revenue": 0} for item in st.session_state.db.keys()}
+    st.session_state.restock_log = {item: 0 for item in st.session_state.db.keys()}
+    st.session_state.last_date = current_date
+
 
 # --- 🧠 VOICE INTENT PROCESSING ENGINE (now powered by Claude for flexible phrasing) ---
 def process_voice_command(text_input):
